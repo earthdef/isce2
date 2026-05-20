@@ -199,6 +199,11 @@ class config(object):
         self.f.write('azimuth_looks : ' + self.azimuthLooks + '\n')
         if self.multilook_tool:
             self.f.write('multilook_tool : ' + self.multilook_tool + '\n')
+            if self.multilook_tool == 'gaussian':
+                if getattr(self, 'sigmaAz', None):
+                    self.f.write('sigma_az : ' + str(self.sigmaAz) + '\n')
+                if getattr(self, 'sigmaRg', None):
+                    self.f.write('sigma_rg : ' + str(self.sigmaRg) + '\n')
         if self.no_data_value is not None:
             self.f.write('no_data_value : ' + self.no_data_value + '\n')
 
@@ -233,6 +238,8 @@ class config(object):
         self.f.write('complex_coh : '+ self.cpxCohName + '\n')
         self.f.write('range_looks : ' + self.rangeLooks + '\n')
         self.f.write('azimuth_looks : ' + self.azimuthLooks + '\n')
+        if getattr(self, 'multilookTool', 'isce') == 'gaussian':
+            self.f.write('multilook_tool : gaussian\n')
 
     def unwrap(self, function):
         self.f.write('###################################'+'\n')
@@ -998,6 +1005,9 @@ class run(object):
             configObj.validOnly = 'True'
             configObj.useVirtualFiles = 'True'
             configObj.multiLook = 'True'
+            tool = getattr(self, 'multilookTool', 'isce')
+            if tool != 'isce':
+                configObj.multilook_tool = tool
             configObj.stack = os.path.join(self.work_dir, 'stack')
             configObj.mergeBurst('[Function-1]')
             configObj.finalize()

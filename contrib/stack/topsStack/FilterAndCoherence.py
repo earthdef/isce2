@@ -124,9 +124,61 @@ def estCoherence(outfile, corfile):
     phsigImage.finalizeImage()
 
 
-def estCpxCoherence(slc1_file, slc2_file, cpx_coh_file, alks=3, rlks=9):
+def gaussianLooks(infile, outfile, alks=3, rlks=9, sigma_az=None, sigma_rg=None):
+    '''
+    Gaussian-weighted multilook: convolve the complex interferogram with a 2-D
+    Gaussian kernel (real and imaginary parts independently) then decimate by
+    alks x rlks.  This is a smooth alternative to boxcar multilooking — same
+    output dimensions, but the tapered weights avoid the spectral ringing that
+    the rectangular boxcar introduces.
+
+    sigma_az / sigma_rg: Gaussian sigma in pixels along azimuth / range.
+    Default (None) sets sigma = looks / 3, which places ~99.7 % of the kernel
+    energy within the look window, giving a footprint comparable to the boxcar.
+    '''
+    from scipy.ndimage import gaussian_filter
+    import numpy as np
+
+    if sigma_az is None:
+        sigma_az = alks / 3.0
+    if sigma_rg is None:
+        sigma_rg = rlks / 3.0
+
+    inimg = isceobj.createIntImage()
+    inimg.load(infile + '.xml')
+    width  = inimg.getWidth()
+    length = inimg.getLength()
+
+    data = np.fromfile(infile, dtype=np.complex64).reshape(length, width)
+
+    real_sm = gaussian_filter(data.real.astype(np.float64), sigma=[sigma_az, sigma_rg])
+    imag_sm = gaussian_filter(data.imag.astype(np.float64), sigma=[sigma_az, sigma_rg])
+
+    out = (real_sm[::alks, ::rlks] + 1j * imag_sm[::alks, ::rlks]).astype(np.complex64)
+    out.tofile(outfile)
+
+    outwidth  = width  // rlks
+    outlength = length // alks
+
+    outimg = inimg.clone()
+    try:
+        outimg.coord1.coordDelta = inimg.coord1.coordDelta * rlks
+        outimg.coord2.coordDelta = inimg.coord2.coordDelta * alks
+        outimg.coord1.coordStart = inimg.coord1.coordStart + 0.5 * (rlks - 1) * inimg.coord1.coordDelta
+        outimg.coord2.coordStart = inimg.coord2.coordStart + 0.5 * (alks - 1) * inimg.coord2.coordDelta
+    except Exception:
+        pass
+    outimg.setFilename(outfile)
+    outimg.setWidth(outwidth)
+    outimg.setLength(outlength)
+    outimg.setAccessMode('write')
+    outimg.renderHdr()
+
+    return outfile
+
+
+def estCpxCoherence(slc1_file, slc2_file, cpx_coh_file, alks=3, rlks=9, multilook_tool='isce'):
     from isceobj.TopsProc.runBurstIfg import computeCoherence
-    from mroipac.looks.Looks import Looks
 
     # get the full resolution file name
     if alks * rlks == 1:
@@ -139,17 +191,21 @@ def estCpxCoherence(slc1_file, slc2_file, cpx_coh_file, alks=3, rlks=9):
 
     # multilook
     if alks * rlks > 1:
-        print('Multilooking {0} ...'.format(cpx_coh_file_full))
+        print('Multilooking {0} using {1} ...'.format(cpx_coh_file_full, multilook_tool))
 
-        inimg = isceobj.createImage()
-        inimg.load(cpx_coh_file_full + '.xml')
+        if multilook_tool == 'gaussian':
+            gaussianLooks(cpx_coh_file_full, cpx_coh_file, alks=alks, rlks=rlks)
+        else:
+            from mroipac.looks.Looks import Looks
+            inimg = isceobj.createImage()
+            inimg.load(cpx_coh_file_full + '.xml')
 
-        lkObj = Looks()
-        lkObj.setDownLooks(alks)
-        lkObj.setAcrossLooks(rlks)
-        lkObj.setInputImage(inimg)
-        lkObj.setOutputFilename(cpx_coh_file)
-        lkObj.looks()
+            lkObj = Looks()
+            lkObj.setDownLooks(alks)
+            lkObj.setAcrossLooks(rlks)
+            lkObj.setInputImage(inimg)
+            lkObj.setOutputFilename(cpx_coh_file)
+            lkObj.looks()
 
         # remove full resolution coherence file
         os.remove(cpx_coh_file_full)
@@ -176,6 +232,10 @@ def createParser():
             dest='cpx_cohfile')
     parser.add_argument('-r','--range_looks',type=int, default=9, help= 'range looks', dest='numberRangelooks')
     parser.add_argument('-z','--azimuth_looks',type=int, default=3, help= 'azimuth looks', dest='numberAzlooks')
+    parser.add_argument('-M','--multilook_tool', type=str, default='isce',
+            choices=['isce', 'gaussian'],
+            help='Multilook tool for complex coherence: isce (boxcar) or gaussian',
+            dest='multilookTool')
     return parser
 
 def cmdLineParse(iargs=None):
@@ -196,7 +256,8 @@ def main(iargs=None):
     if inps.slc1 and inps.slc2:
         estCpxCoherence(inps.slc1, inps.slc2, inps.cpx_cohfile,
                         alks=inps.numberAzlooks,
-                        rlks=inps.numberRangelooks)
+                        rlks=inps.numberRangelooks,
+                        multilook_tool=inps.multilookTool)
 
     return
 

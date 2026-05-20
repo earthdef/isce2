@@ -169,6 +169,16 @@ def createParser():
     ifgram.add_argument('-f', '--filter_strength', dest='filtStrength', type=str, default='0.5',
                         help='Filter strength for interferogram filtering (default: %(default)s).')
 
+    ifgram.add_argument('-M', '--multilook_tool', dest='multilookTool', type=str, default='isce',
+                        choices=['isce', 'gdal', 'gaussian'],
+                        help='Multilook tool for interferogram: isce (boxcar), gdal, or gaussian (default: %(default)s).')
+
+    ifgram.add_argument('--sigma_az', dest='sigmaAz', type=str, default=None,
+                        help='Gaussian sigma in azimuth pixels, used when --multilook_tool=gaussian (default: azimuthLooks/3).')
+
+    ifgram.add_argument('--sigma_rg', dest='sigmaRg', type=str, default=None,
+                        help='Gaussian sigma in range pixels, used when --multilook_tool=gaussian (default: rangeLooks/3).')
+
     # phase unwrap
     unwrap = parser.add_argument_group('Phase unwrapping options', 'Configurations for phase unwrapping')
     unwrap.add_argument('-u', '--unw_method', dest='unwMethod', type=str, default='snaphu', choices=['icu', 'snaphu'],

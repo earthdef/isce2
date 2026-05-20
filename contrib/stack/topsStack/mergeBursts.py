@@ -63,10 +63,17 @@ def createParser():
                         help='writing only a vrt of merged file. Default: True.')
 
     parser.add_argument('-M', '--multilook_tool', type=str, dest='multilookTool', default='isce',
-                        help='The tool used for multi-looking')
+                        choices=['isce', 'gdal', 'gaussian'],
+                        help='The tool used for multi-looking: isce/gdal (boxcar), gaussian (Gaussian-weighted)')
 
     parser.add_argument('-N', '--no_data_value', type=float, dest='noData', default=None,
                         help='no data value when gdal is used for multi-looking')
+
+    parser.add_argument('--sigma_az', type=float, dest='sigmaAz', default=None,
+                        help='Gaussian sigma in azimuth pixels when multilook_tool=gaussian (default: azimuth_looks/3)')
+
+    parser.add_argument('--sigma_rg', type=float, dest='sigmaRg', default=None,
+                        help='Gaussian sigma in range pixels when multilook_tool=gaussian (default: range_looks/3)')
 
     return parser
 
@@ -280,9 +287,13 @@ def mergeBursts(frame, fileList, outfile,
         pass
 
 
-def multilook(infile, outname=None, alks=5, rlks=15, multilook_tool="isce", no_data=None):
+def multilook(infile, outname=None, alks=5, rlks=15, multilook_tool="isce", no_data=None,
+              sigma_az=None, sigma_rg=None):
     '''
     Take looks.
+    multilook_tool='gaussian' applies a Gaussian-weighted spatial average to the
+    real and imaginary parts of a complex interferogram before decimation, avoiding
+    the spectral sidelobes introduced by the rectangular boxcar kernel.
     '''
 
     # default output filename
@@ -291,7 +302,46 @@ def multilook(infile, outname=None, alks=5, rlks=15, multilook_tool="isce", no_d
         ext = '.{0}alks_{1}rlks'.format(alks, rlks)
         outname = spl[0] + ext + spl[1]
 
-    if multilook_tool=="gdal":
+    if multilook_tool == "gaussian":
+        from scipy.ndimage import gaussian_filter
+        import numpy as np
+
+        if sigma_az is None:
+            sigma_az = alks / 3.0
+        if sigma_rg is None:
+            sigma_rg = rlks / 3.0
+
+        print(f'multilooking {rlks} x {alks} using Gaussian (sigma_rg={sigma_rg:.2f}, sigma_az={sigma_az:.2f}) for {infile} ...')
+
+        inimg = isceobj.createIntImage()
+        inimg.load(infile + '.xml')
+        width  = inimg.getWidth()
+        length = inimg.getLength()
+
+        data = np.fromfile(infile, dtype=np.complex64).reshape(length, width)
+        real_sm = gaussian_filter(data.real.astype(np.float64), sigma=[sigma_az, sigma_rg])
+        imag_sm = gaussian_filter(data.imag.astype(np.float64), sigma=[sigma_az, sigma_rg])
+        out = (real_sm[::alks, ::rlks] + 1j * imag_sm[::alks, ::rlks]).astype(np.complex64)
+        out.tofile(outname)
+
+        outwidth  = width  // rlks
+        outlength = length // alks
+
+        outimg = inimg.clone()
+        try:
+            outimg.coord1.coordDelta = inimg.coord1.coordDelta * rlks
+            outimg.coord2.coordDelta = inimg.coord2.coordDelta * alks
+            outimg.coord1.coordStart = inimg.coord1.coordStart + 0.5 * (rlks - 1) * inimg.coord1.coordDelta
+            outimg.coord2.coordStart = inimg.coord2.coordStart + 0.5 * (alks - 1) * inimg.coord2.coordDelta
+        except Exception:
+            pass
+        outimg.setFilename(outname)
+        outimg.setWidth(outwidth)
+        outimg.setLength(outlength)
+        outimg.setAccessMode('write')
+        outimg.renderHdr()
+
+    elif multilook_tool=="gdal":
         # remove existing *.hdr files, to avoid the following gdal error:
         # ERROR 1: Input and output dataset sizes or band counts do not match in GDALDatasetCopyWholeRaster()
         fbase = os.path.splitext(outname)[0]
@@ -425,11 +475,13 @@ def main(iargs=None):
 
     if inps.multilook:
         multilook(inps.outfile+suffix,
-                  outname=inps.outfile, 
+                  outname=inps.outfile,
                   alks=inps.numberAzimuthLooks,
                   rlks=inps.numberRangeLooks,
                   multilook_tool=inps.multilookTool,
-                  no_data=inps.noData)
+                  no_data=inps.noData,
+                  sigma_az=getattr(inps, 'sigmaAz', None),
+                  sigma_rg=getattr(inps, 'sigmaRg', None))
     else:
         print('Skipping multi-looking ....')
 
